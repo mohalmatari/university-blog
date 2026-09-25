@@ -5,6 +5,7 @@ import com.unversity.blog.demo.dto.UserResponseDTO;
 import com.unversity.blog.demo.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ public class UserController {
     @Autowired
     private UserService userService;
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping
     public UserResponseDTO createUser(@Valid @RequestBody UserRequestDTO requestDTO) {
         return userService.createUser(requestDTO);
