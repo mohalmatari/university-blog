@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>University Blog</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+          theme: {
+            extend: {
+              colors: {
+                paper: '#F6F5F1',
+                'paper-2': '#EFEDE6',
+                ink: '#22251F',
+                'ink-soft': '#5B5E54',
+                rule: '#D8D5CB',
+                accent: '#2C3E63',
+                danger: '#7A3B3B',
+                ok: '#4B6350'
+              },
+              fontFamily: {
+                serif: ['Georgia', 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', 'serif'],
+              }
+            }
+          }
+        }
+    </script>
+</head>
+<body class="bg-paper text-ink font-sans leading-relaxed">
+
+<!-- Toasts -->
+<div id="toasts" aria-live="polite" class="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80"></div>
+
+<!-- Utility bar -->
+<div class="border-b border-rule bg-paper-2">
+    <div class="max-w-3xl mx-auto px-5 py-2 flex flex-wrap justify-between items-center gap-3 text-sm">
+        <input id="apiBase" type="text" placeholder="same origin (default)"
+               title="API base URL — leave blank to use this same server"
+               class="w-48 text-xs bg-paper border border-rule px-2 py-1 text-ink-soft focus:outline-none focus:border-ink">
+        <div id="whoBox" class="flex items-center gap-3"></div>
+    </div>
+</div>
+
+<header class="text-center pt-11 pb-4">
+    <h1 class="font-serif text-4xl md:text-5xl">University Blog</h1>
+    <p class="text-ink-soft text-sm mt-2">A demo client for a Spring Boot blog API — JWT auth, posts, and comments.</p>
+</header>
+<hr class="border-t-2 border-ink">
+
+<div class="max-w-3xl mx-auto px-5"><main id="app"></main></div>
+
+<footer class="text-center text-xs text-ink-soft py-10">
+    Built to exercise a self-hosted REST API. Not a production frontend.
+</footer>
+
+<script>
+    /* ---------- API client ---------- */
+    const Auth = {
+      get token(){ return localStorage.getItem('ub_token'); },
+      get username(){ return localStorage.getItem('ub_username'); },
+      get role(){ return localStorage.getItem('ub_role'); },
+      set({token, username, role}){
+        localStorage.setItem('ub_token', token);
+        localStorage.setItem('ub_username', username);
+        localStorage.setItem('ub_role', role);
+      },
+      clear(){ localStorage.removeItem('ub_token'); localStorage.removeItem('ub_username'); localStorage.removeItem('ub_role'); }
+    };
+
+    function apiBase(){ return document.getElementById('apiBase').value.trim().replace(/\/$/,''); }
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('apiBase').value = localStorage.getItem('ub_base') || '';
+      document.getElementById('apiBase').addEventListener('change', e => localStorage.setItem('ub_base', e.target.value.trim()));
+    });
+
+    // Central request function: attaches the Bearer token, parses JSON,
+    // and on 401 clears the session and forces the user back to sign-in
+    // (a 401 means "we don't trust who you say you are" — a stale/expired
+    // token — so there's nothing to do but re-authenticate).
+    async function api(path, opts = {}) {
+      const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+      if (Auth.token) headers['Authorization'] = 'Bearer ' + Auth.token;
+
+      let res;
+      try {
+        res = await fetch(apiBase() + path, { ...opts, headers });
+      } catch (e) {
+        throw new Error("Couldn't reach the API. Check the base URL above and that the backend is running.");
+      }
+
+      if (res.status === 401) {
+        Auth.clear();
+        toast('Your session expired. Please sign in again.', 'error');
+        goto('auth');
+        throw new Error('Session expired.');
+      }
+
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+
+      if (!res.ok) {
+        let msg = data?.message || `${res.status} ${res.statusText}`;
+        if (data?.messages) msg = Object.values(data.messages).join(', ');
+        throw new Error(msg); // 403 and everything else surfaces as a readable message
+      }
+      return data;
+    }
+
+    /* ---------- Toasts ---------- */
+    function toast(message, type = 'ok') {
+      const el = document.createElement('div');
+      const styles = type === 'error'
+        ? 'border-danger text-danger bg-red-50'
+        : 'border-ok text-ok bg-green-50';
+      el.className = `border ${styles} text-sm px-4 py-3 shadow-sm cursor-pointer`;
+      el.textContent = message;
+      el.onclick = () => el.remove();
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4500);
+    }
+
+    /* ---------- State & routing ---------- */
+    const state = { view: 'feed', authTab: 'login', page: 0, postId: null };
+    function goto(view, extra) { state.view = view; Object.assign(state, extra || {}); render(); }
+    function esc(s){ const d=document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+    function fmtDate(s){ return s ? new Date(s).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}) : ''; }
+
+    function renderWho() {
+      const box = document.getElementById('whoBox');
+      box.innerHTML = Auth.token
+        ? `<span class="text-ink-soft">Signed in as <strong class="text-ink">${esc(Auth.username)}</strong>${Auth.role === 'ADMIN' ? ' · admin' : ''}</span>
+           <button class="border border-rule px-3 py-1 text-xs hover:border-ink" onclick="logout()">Sign out</button>`
+        : `<button class="bg-ink text-paper px-3 py-1 text-xs hover:opacity-85" onclick="goto('auth')">Sign in</button>`;
+    }
+    function logout(){ Auth.clear(); goto('feed'); }
+
+    async function render() {
+      renderWho();
+      const app = document.getElementById('app');
+      app.innerHTML = '';
+      if (state.view === 'auth') return renderAuth(app);
+      if (state.view === 'new') return renderNewPost(app);
+      if (state.view === 'detail') return renderDetail(app);
+      return renderFeed(app);
+    }
+
+    /* ---------- Feed ---------- */
+    async function renderFeed(app) {
+      app.innerHTML = `
+        <div class="flex justify-between items-baseline mb-5 mt-8">
+          <h2 class="font-serif text-2xl">Latest posts</h2>
+          ${Auth.token ? `<button class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85" onclick="goto('new')">Write a post</button>` : ''}
+        </div>
+        <div id="feedList" class="text-ink-soft text-sm py-5">Loading…</div>`;
+
+      const list = document.getElementById('feedList');
+      try {
+        const p = await api(`/api/posts?page=${state.page}&size=6&sort=createdAt,desc`);
+        if (!p.content.length) { list.innerHTML = '<div class="text-ink-soft text-sm py-5">No posts yet. Be the first to write one.</div>'; return; }
+        list.innerHTML = '';
+        p.content.forEach(post => {
+          const excerpt = post.content.length > 220 ? post.content.slice(0, 220) + '…' : post.content;
+          const div = document.createElement('article');
+          div.className = 'py-6 border-b border-rule';
+          div.innerHTML = `
+            <h3 class="font-serif text-2xl mb-1">
+              <a href="#" class="hover:underline" onclick="goto('detail',{postId:${post.id}});return false;">${esc(post.title)}</a>
+            </h3>
+            <div class="text-xs text-ink-soft mb-2">by ${esc(post.authorUsername)}, ${fmtDate(post.createdAt)}</div>
+            <p class="text-[15px]">${esc(excerpt)}</p>`;
+          list.appendChild(div);
+        });
+        const pager = document.createElement('div');
+        pager.className = 'flex justify-center gap-4 text-sm mt-6';
+        pager.innerHTML = `
+          <button class="text-accent hover:underline disabled:text-rule disabled:no-underline" ${p.first ? 'disabled' : ''} onclick="state.page--;render()">← Newer</button>
+          <span class="text-ink-soft">Page ${p.number + 1} of ${Math.max(p.totalPages, 1)}</span>
+          <button class="text-accent hover:underline disabled:text-rule disabled:no-underline" ${p.last ? 'disabled' : ''} onclick="state.page++;render()">Older →</button>`;
+        app.appendChild(pager);
+      } catch (e) {
+        list.innerHTML = `<div class="text-danger text-sm py-3">${esc(e.message)}</div>`;
+      }
+    }
+
+    /* ---------- Auth ---------- */
+    function inputField(id, label, type, extra = '') {
+      return `<div>
+        <label for="${id}" class="block text-xs text-ink-soft mb-1">${label}</label>
+        <input id="${id}" type="${type}" ${extra} required
+          class="w-full border-0 border-b border-rule bg-transparent px-1 py-2 text-[15px] focus:outline-none focus:border-ink">
+      </div>`;
+    }
+
+    function renderAuth(app) {
+      app.innerHTML = `
+        <div class="flex gap-6 border-b border-rule mb-6 mt-8" role="tablist">
+          <button role="tab" aria-selected="${state.authTab==='login'}" class="pb-2 text-sm ${state.authTab === 'login' ? 'border-b-2 border-ink text-ink' : 'text-ink-soft'}" onclick="state.authTab='login';render()">Sign in</button>
+          <button role="tab" aria-selected="${state.authTab==='register'}" class="pb-2 text-sm ${state.authTab === 'register' ? 'border-b-2 border-ink text-ink' : 'text-ink-soft'}" onclick="state.authTab='register';render()">Create account</button>
+        </div>
+        <div id="authFormHolder" class="max-w-sm"></div>`;
+
+      const holder = document.getElementById('authFormHolder');
+      if (state.authTab === 'login') {
+        holder.innerHTML = `
+          <form id="loginForm" class="flex flex-col gap-4">
+            ${inputField('lUser', 'Username', 'text')}
+            ${inputField('lPass', 'Password', 'password')}
+            <button type="submit" class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85 w-fit">Sign in</button>
+          </form>`;
+        document.getElementById('loginForm').onsubmit = async e => {
+          e.preventDefault();
+          try {
+            const data = await api('/api/auth/login', {
+              method: 'POST',
+              body: JSON.stringify({ username: lUser.value, password: lPass.value })
+            });
+            Auth.set(data);
+            toast(`Welcome back, ${data.username}.`);
+            goto('feed');
+          } catch (err) { toast(err.message, 'error'); }
+        };
+      } else {
+        holder.innerHTML = `
+          <form id="regForm" class="flex flex-col gap-4">
+            ${inputField('rUser', 'Username (3–20 characters)', 'text', 'minlength="3" maxlength="20"')}
+            ${inputField('rEmail', 'Email', 'email')}
+            ${inputField('rPass', 'Password (6+ characters)', 'password', 'minlength="6"')}
+            <button type="submit" class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85 w-fit">Create account</button>
+          </form>`;
+        document.getElementById('regForm').onsubmit = async e => {
+          e.preventDefault();
+          try {
+            await api('/api/auth/register', {
+              method: 'POST',
+              body: JSON.stringify({ username: rUser.value, email: rEmail.value, password: rPass.value })
+            });
+            toast('Account created — sign in below.');
+            state.authTab = 'login';
+            render();
+          } catch (err) { toast(err.message, 'error'); }
+        };
+      }
+    }
+
+    /* ---------- New post ---------- */
+    function renderNewPost(app) {
+      app.innerHTML = `
+        <h2 class="font-serif text-2xl mb-5 mt-8">Write a post</h2>
+        <form id="postForm" class="flex flex-col gap-4 max-w-xl">
+          <div>
+            <label for="pTitle" class="block text-xs text-ink-soft mb-1">Title</label>
+            <input id="pTitle" required class="w-full border-0 border-b border-rule bg-transparent px-1 py-2 text-[15px] focus:outline-none focus:border-ink">
+          </div>
+          <div>
+            <label for="pContent" class="block text-xs text-ink-soft mb-1">Content</label>
+            <textarea id="pContent" required rows="8" class="w-full border border-rule bg-transparent p-3 text-[15px] focus:outline-none focus:border-ink"></textarea>
+          </div>
+          <div class="flex gap-3">
+            <button type="submit" class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85">Publish</button>
+            <button type="button" class="border border-rule px-4 py-2 text-sm hover:border-ink" onclick="goto('feed')">Cancel</button>
+          </div>
+        </form>`;
+      document.getElementById('postForm').onsubmit = async e => {
+        e.preventDefault();
+        try {
+          await api('/api/posts', { method: 'POST', body: JSON.stringify({ title: pTitle.value, content: pContent.value }) });
+          state.page = 0;
+          toast('Post published.');
+          goto('feed');
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+
+    /* ---------- Detail + comments ---------- */
+    async function renderDetail(app) {
+      app.innerHTML = `<a href="#" class="text-sm text-accent hover:underline mt-8 inline-block" onclick="goto('feed');return false;">← Back to posts</a>
+        <div id="detailHolder" class="text-ink-soft text-sm py-5">Loading…</div>`;
+      const holder = document.getElementById('detailHolder');
+
+      let post;
+      try { post = await api(`/api/posts/${state.postId}`); }
+      catch (e) { holder.innerHTML = `<div class="text-danger text-sm py-3">${esc(e.message)}</div>`; return; }
+
+      const canEdit = Auth.token && (Auth.username === post.authorUsername || Auth.role === 'ADMIN');
+      holder.innerHTML = `
+        <h2 class="font-serif text-3xl mt-2 mb-1">${esc(post.title)}</h2>
+        <div class="text-xs text-ink-soft mb-4">
+          by ${esc(post.authorUsername)}, ${fmtDate(post.createdAt)}
+          ${post.updatedAt && post.updatedAt !== post.createdAt ? ' · edited ' + fmtDate(post.updatedAt) : ''}
+        </div>
+        <p class="text-[16px] whitespace-pre-wrap mb-4">${esc(post.content)}</p>
+        ${canEdit ? `<div class="flex gap-4 mb-6">
+          <button class="text-sm border border-rule px-3 py-1 hover:border-ink" onclick="editPost(${post.id})">Edit</button>
+          <button class="text-sm border border-danger text-danger px-3 py-1 hover:bg-red-50" onclick="deletePost(${post.id})">Delete</button>
+        </div>` : ''}
+        <hr class="border-rule my-6">
+        <h3 class="font-serif text-xl mb-3">Comments</h3>
+        <div id="comments" class="text-ink-soft text-sm py-3">Loading…</div>
+        ${Auth.token ? `
+        <form id="commentForm" class="flex flex-col gap-3 mt-4 max-w-xl">
+          <label for="cContent" class="sr-only">Add a comment</label>
+          <textarea id="cContent" placeholder="Add a comment…" maxlength="500" required rows="3"
+            class="w-full border border-rule bg-transparent p-3 text-[15px] focus:outline-none focus:border-ink"></textarea>
+          <button type="submit" class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85 w-fit">Comment</button>
+        </form>` : `<p class="text-sm text-ink-soft mt-3"><a href="#" class="text-accent hover:underline" onclick="goto('auth');return false;">Sign in</a> to comment.</p>`}
+      `;
+
+      loadComments(post.id);
+      if (Auth.token) {
+        document.getElementById('commentForm').onsubmit = async e => {
+          e.preventDefault();
+          try {
+            await api(`/api/comments?postId=${post.id}`, { method: 'POST', body: JSON.stringify({ content: cContent.value }) });
+            cContent.value = '';
+            loadComments(post.id);
+          } catch (err) { toast(err.message, 'error'); }
+        };
+      }
+    }
+
+    async function loadComments(postId) {
+      const box = document.getElementById('comments');
+      try {
+        const p = await api(`/api/comments/post/${postId}?size=20&sort=createdAt,desc`);
+        if (!p.content.length) { box.innerHTML = '<div class="text-ink-soft text-sm">No comments yet.</div>'; return; }
+        box.innerHTML = '';
+        p.content.forEach(c => {
+          const canDelete = Auth.token && (Auth.username === c.authorUsername || Auth.role === 'ADMIN');
+          const div = document.createElement('div');
+          div.className = 'py-3 border-t border-rule';
+          div.innerHTML = `
+            <div class="text-xs text-ink-soft mb-1">${esc(c.authorUsername)}, ${fmtDate(c.createdAt)}
+              ${canDelete ? ` · <a href="#" class="text-accent hover:underline" onclick="deleteComment(${c.id},${postId});return false;">delete</a>` : ''}
+            </div>
+            <p class="text-sm">${esc(c.content)}</p>`;
+          box.appendChild(div);
+        });
+      } catch (e) { box.innerHTML = `<div class="text-danger text-sm">${esc(e.message)}</div>`; }
+    }
+
+    async function deleteComment(id, postId) {
+      if (!confirm('Delete this comment?')) return;
+      try { await api(`/api/comments/${id}`, { method: 'DELETE' }); loadComments(postId); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function editPost(id) {
+      const post = await api(`/api/posts/${id}`);
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <h2 class="font-serif text-2xl mb-5 mt-8">Edit post</h2>
+        <form id="editForm" class="flex flex-col gap-4 max-w-xl">
+          <div>
+            <label for="eTitle" class="block text-xs text-ink-soft mb-1">Title</label>
+            <input id="eTitle" value="${esc(post.title)}" required class="w-full border-0 border-b border-rule bg-transparent px-1 py-2 text-[15px] focus:outline-none focus:border-ink">
+          </div>
+          <div>
+            <label for="eContent" class="block text-xs text-ink-soft mb-1">Content</label>
+            <textarea id="eContent" required rows="8" class="w-full border border-rule bg-transparent p-3 text-[15px] focus:outline-none focus:border-ink">${esc(post.content)}</textarea>
+          </div>
+          <div class="flex gap-3">
+            <button type="submit" class="bg-ink text-paper px-4 py-2 text-sm hover:opacity-85">Save</button>
+            <button type="button" class="border border-rule px-4 py-2 text-sm hover:border-ink" onclick="goto('detail',{postId:${id}})">Cancel</button>
+          </div>
+        </form>`;
+      document.getElementById('editForm').onsubmit = async e => {
+        e.preventDefault();
+        try {
+          await api(`/api/posts/${id}`, { method: 'PUT', body: JSON.stringify({ title: eTitle.value, content: eContent.value }) });
+          toast('Post updated.');
+          goto('detail', { postId: id });
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+
+    async function deletePost(id) {
+      if (!confirm('Delete this post? This cannot be undone.')) return;
+      try { await api(`/api/posts/${id}`, { method: 'DELETE' }); toast('Post deleted.'); goto('feed'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    render();
+</script>
+</body>
+</html>
