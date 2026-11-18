@@ -12,6 +12,7 @@ A minimal single-page HTML/JS client is included as a working demo of the API (`
 - **Bean Validation** (Jakarta Validation) for request validation
 - **springdoc-openapi** for interactive API documentation
 - **Maven**
+- **JUnit 5** · **Mockito** · **H2** (in-memory database, tests only) for automated testing
 
 ## Features
 
@@ -104,7 +105,7 @@ The app expects these to be set (no secrets are committed to the repo):
 ### Run locally
 
 ```bash
-git clone https://github.com/<your-username>/university-blog.git
+git clone https://github.com/mohalmatari/university-blog.git
 cd university-blog
 
 # set environment variables, then:
@@ -115,6 +116,24 @@ The API will start on `http://localhost:8080`.
 
 - **Swagger UI:** `http://localhost:8080/swagger-ui/index.html`
 - **Demo client:** `http://localhost:8080/` (served from `src/main/resources/static`)
+
+## Testing
+
+The test suite runs without any external services: no Supabase connection, no environment variables.
+
+```bash
+./mvnw test
+```
+
+| Test class | What it covers |
+|---|---|
+| `PostServiceTest` | Create, read, update and delete rules for posts: the owner and an admin are allowed, any other user gets `AccessDeniedException`, and nothing is saved or deleted when access is denied |
+| `CommentServiceTest` | Same ownership and admin rules for comments, plus not-found handling and the post/user comment lookups |
+| `JwtUtilTest` | Token generation and validation: username round trip, wrong user, tampered, forged (different key), garbage and expired tokens are all rejected |
+| `DemoApplicationTests` | The whole Spring context starts correctly (security, JPA, JWT configuration) |
+
+- **Unit tests** use Mockito to replace the repositories and `SecurityUtils`, so only the service logic under test runs.
+- **Test configuration** lives in `src/test/resources/application.properties`: an in-memory H2 database and a dummy JWT secret that is used only for tests.
 
 ## Security Notes
 
@@ -129,6 +148,9 @@ The API will start on `http://localhost:8080`.
 - [ ] Refresh tokens
 - [ ] Search/filtering on posts
 - [ ] Likes / tags
+- [ ] Controller and security tests (MockMvc), repository tests against a real PostgreSQL (Testcontainers)
+- [ ] Docker + CI with GitHub Actions
+- [ ] Deployment
 
 ## About
 
