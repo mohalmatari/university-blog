@@ -129,6 +129,7 @@ The test suite runs without any external services: no Supabase connection, no en
 |---|---|
 | `PostServiceTest` | Create, read, update and delete rules for posts: the owner and an admin are allowed, any other user gets `AccessDeniedException`, and nothing is saved or deleted when access is denied |
 | `CommentServiceTest` | Same ownership and admin rules for comments, plus not-found handling and the post/user comment lookups |
+| `UserServiceTest` | Registration and account rules: passwords are stored hashed, new accounts are always plain `USER`, the owner and an admin can edit or delete an account, and any other user is rejected with nothing changed |
 | `JwtUtilTest` | Token generation and validation: username round trip, wrong user, tampered, forged (different key), garbage and expired tokens are all rejected |
 | `DemoApplicationTests` | The whole Spring context starts correctly (security, JPA, JWT configuration) |
 
